@@ -3,12 +3,42 @@
 from __future__ import annotations
 
 import argparse
+from types import SimpleNamespace
 
 import bittensor as bt
 import os
 import traceback
 
 traceback.format_exc()
+
+
+def _ensure_namespace(parent: object, name: str) -> SimpleNamespace:
+    namespace = getattr(parent, name, None)
+    if namespace is None:
+        namespace = SimpleNamespace()
+        setattr(parent, name, namespace)
+    return namespace
+
+
+def _assign_config_value(config: "bt.Config", key: str, value: object) -> None:
+    parts = key.split(".")
+    if len(parts) == 1:
+        setattr(config, key, value)
+        return
+
+    current: object = config
+    for part in parts[:-1]:
+        current = _ensure_namespace(current, part)
+    setattr(current, parts[-1], value)
+
+
+def _apply_custom_argparse_values(config: "bt.Config", parser: argparse.ArgumentParser) -> None:
+    """Preserve repo-specific argparse values with Bittensor SDKs that drop them."""
+    args, _unknown = parser.parse_known_args()
+    for key, value in vars(args).items():
+        if key in {"config", "strict"}:
+            continue
+        _assign_config_value(config, key, value)
 
 
 def add_args(cls, parser: argparse.ArgumentParser) -> None:
@@ -20,6 +50,12 @@ def add_args(cls, parser: argparse.ArgumentParser) -> None:
     bt.Axon.add_args(parser)
     
     parser.add_argument("--netuid", type=int, help="Subnet netuid", default=126)
+    parser.add_argument(
+        "--neuron.name",
+        type=str,
+        default=getattr(cls, "neuron_type", "neuron"),
+        help="Name used for local neuron logging and state paths.",
+    )
     
     parser.add_argument(
         "--neuron.device",
@@ -190,4 +226,6 @@ def check_config(cls, config: "bt.Config"):
 def config(cls) -> bt.Config:
     parser = argparse.ArgumentParser()
     cls.add_args(parser)
-    return bt.Config(parser=parser)
+    cfg = bt.Config(parser=parser)
+    _apply_custom_argparse_values(cfg, parser)
+    return cfg
